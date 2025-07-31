@@ -10,6 +10,7 @@
 
 #define SERVER_PORT 5000
 #define MAX_MSG_LENGTH 128
+#define MAX_VAL_READ_LEN 100
 #define MAX_WORDS 3
 #define MAX_PATH_LEN 128
 #define DB_FOLDER_PERM  0755
@@ -24,7 +25,8 @@ int serverReadMessage(int s, char * buffer);
 int serverSendMessage(int s, char * buffer);
 void serverSendUsageMsg(int s);
 void dbCreateKey(const char * pathKey, const char * value);
-static void utilityStringTokenize(char * string, int maxTokens, char * array[]);
+void dbGetValue(const char * pathKey, char * value);
+static int utilityStringTokenize(char * string, int maxTokens, char * array[]);
 static void utilsEnsureDirectoryExists(const char * path);
 static int utilsFIleExists(const char * path);
 static void utilsGenerateFilePath(const char *folder, const char * filename, char * fullpath);
@@ -44,66 +46,86 @@ int main(void){
         char msg[MAX_MSG_LENGTH];
         int bytesRead = serverReadMessage(clientSoc, msg);
 
-        if(bytesRead > 5){ // 3 del comando + 1 espacio + al menos 1 clave 
+        if(bytesRead > 5){ // 3 del comando + 1 espacio + al menos 1 clave, si no se cumple ni miro que llego
             char *words[MAX_WORDS];
-            utilityStringTokenize(msg, MAX_WORDS, words);
-            if(words[1]){
+            int params = utilityStringTokenize(msg, MAX_WORDS, words);
+            printf("debug: parametros recibidos %d\n", params);
+
+            if(params > 1){ // ademas del comando hay algo mas
+                
+                // aseguro q exista la carpeta
+                utilsEnsureDirectoryExists(PATH_DB_FOLDER); 
+                // creo la ruta del archivo
+                char fullpath[MAX_PATH_LEN];
+                utilsGenerateFilePath(PATH_DB_FOLDER, words[1], fullpath);
+
                 if (strcmp(words[0], "SET") == 0) {
-                    printf("Comando SET detectado\n");
-                    if(words[2]){
-                        printf("SET %s %s\n", words[1], words[2]);
-                        // crear el registro
-                        utilsEnsureDirectoryExists(PATH_DB_FOLDER); // aseguro q este la carpeta
-                        char fullpath[MAX_PATH_LEN];
-                        utilsGenerateFilePath(PATH_DB_FOLDER, words[1], fullpath); // creo la ruta del archivo
+                    printf("info: comando SET detectado\n");
+
+                    if(params == 3){ // tengo clave y valor
+                        printf("debug: SET %s %s\n", words[1], words[2]);
+ 
+                        // chequeo si ya existe la clave
                         if (utilsFIleExists(fullpath)){ 
-                            printf("ERROR: archivo a setear ya existe");
-                            // char resp[MAX_MSG_LENGTH]; 
-                            // sprintf(resp, "ERROR: la clave %s ya existe.\n", words[1]);
+                            printf("info: archivo a setear ya existe");
                             serverSendMessage(clientSoc, "ALREADYSET\n");
                         } else {
+                            // crear el registro
                             dbCreateKey(fullpath, words[2]);
-                            printf("Archivo creado: %s, valor: %s\n", fullpath, words[2]);
+                            printf("info: archivo creado: %s, valor: %s\n", fullpath, words[2]);
                             serverSendMessage(clientSoc, "OK\n");
                         }
                     } else {
-                        printf("SET Comando muy corto.\n");
+                        printf("info: SET comando muy corto.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando SET requiere clave y valor.\n");
 
                     }
                 } else if (strcmp(words[0], "GET") == 0) {
-                    printf("Comando GET detectado\n");
-                    if(!words[2]){
-                        printf("GET %s\n", words[1]);
-                        // devolver el valor
+                    printf("info: comando GET detectado\n");
+                    if(params == 2){ // solo el cmd y una clave
+                        printf("debug: GET %s\n", words[1]);
+                        // chequeo si existe la clave
+                        if (utilsFIleExists(fullpath)){ 
+                            // obtengo el valor
+                            char value[MAX_VAL_READ_LEN];
+                            dbGetValue(fullpath, value);
+                            printf("info: valor a devolver %s", value);
+                            // y lo devuelvo
+                            char resp[MAX_MSG_LENGTH]; 
+                            sprintf(resp, "OK\n%s\n", value);
+                            serverSendMessage(clientSoc, resp);
+                        } else {
+                            printf("info: archivo solicitado no existe: %s\n", fullpath);
+                            serverSendMessage(clientSoc, "NOTFOUND\n");
+                        }
 
                     } else {
-                        printf("GET Comando muy largo.\n");
+                        printf("info: GET comando muy largo.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando GET solo requiere clave.\n");
                     }
 
                 } else if (strcmp(words[0], "DEL") == 0) {
                     printf("Comando DEL detectado\n");
-                    if(!words[2]){
+                    if(params == 2){ // solo el cmd y una clave
                         printf("DEL %s\n", words[1]);
                         // eliminar el registro
 
                     } else {
-                        printf("DEL Comando muy largo.\n");
+                        printf("info: DEL comando muy largo.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
                     }
                 } else {
-                    printf("Ningun comando detectado\n");
+                    printf("info: ningun comando detectado\n");
                     serverSendMessage(clientSoc, "ERROR: ningún comando válido detectado.\n");
                     serverSendUsageMsg(clientSoc);
                 }
             } else {
-                printf("Comando muy corto.\n");
+                printf("info: comando muy corto.\n");
                 serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
                 serverSendUsageMsg(clientSoc);
             }
         } else {
-            printf("Comando muy corto.\n");
+            printf("info: comando muy corto.\n");
             serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
             serverSendUsageMsg(clientSoc);
         }
@@ -131,13 +153,13 @@ int serverSocketSet(int port){
 
     // Abrimos puerto 
     if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1) {
-        perror("bind");
+        perror("Error in bind");
         exit(EXIT_FAILURE);
     }
 
     // Seteamos socket en modo Listening
     if (listen(s, 1) == -1) {
-        perror("listen");
+        perror("Error in listen");
         exit(EXIT_FAILURE);
     }
 
@@ -149,15 +171,15 @@ int serverSocketAccept(int serverSoc){
     socklen_t addr_len = sizeof(struct sockaddr_in);
     struct sockaddr_in clientaddr;
     int clientSoc;
-    printf("server: esperando una conexion...\n");
+    printf("info: esperando una conexión...\n");
     if ((clientSoc = accept(serverSoc, (struct sockaddr *)&clientaddr, &addr_len)) == -1) {
-        perror("accept");
+        perror("Error in accept");
         exit(EXIT_FAILURE);
     }
 
     char ipClient[32];
     inet_ntop(AF_INET, &(clientaddr.sin_addr), ipClient, sizeof(ipClient));
-    printf("server: conexion desde:  %s\n", ipClient);
+    printf("info: conexión desde:  %s\n", ipClient);
 
     return clientSoc;
 }
@@ -165,11 +187,11 @@ int serverSocketAccept(int serverSoc){
 int serverReadMessage(int s, char * buffer){
     int n;
     if ((n = read(s, buffer, MAX_MSG_LENGTH)) == -1) {
-        perror("read");
+        perror("Error in read");
         exit(EXIT_FAILURE);
     }
-    buffer[n-1] = 0x00; // sobreescribo el enter
-    printf("server: recibi %d bytes:%s\n", n, buffer);
+    buffer[n-1] = 0x00; // sobreescribo el salto de linea
+    printf("info: recibidos %d bytes:%s\n", n, buffer);
     return n;
 }
 
@@ -177,16 +199,17 @@ int serverSendMessage(int s, char * buffer){
     int n;
     int len = strlen(buffer);
     if(len > MAX_MSG_LENGTH){
-        fprintf(stderr, "ERROR invalid command message to send too long.\n");
+        fprintf(stderr, "ERROR in serverSendMessage: message too long.\n");
         exit(EXIT_FAILURE);
     }
     if ((n = write(s, buffer, len)) == -1) {
-        perror("write");
+        perror("Error in write");
         exit(EXIT_FAILURE);
     }
-    printf("server: envie %d bytes\n", n);
+    printf("server: enviados %d bytes\n", n);
     return n;
 }
+
 void serverSendUsageMsg(int s){
     serverSendMessage(s, "Usage:\n<CMD> <key> [<value>]\nComandos:\n\tSET\tSetea un registro clave-valor nuevo.\n");
     serverSendMessage(s, "\tGET\tObtiene el valor de una clave.\n\tDEL\tElimina un registro a partir de su clave.\n");
@@ -197,29 +220,55 @@ void dbCreateKey(const char * pathKey, const char * value){
     // creo el archivo y lo abro
     int fd = open(pathKey, O_WRONLY | O_CREAT , FILES_PERM);
     if (fd == -1) {
-        perror("open");
+        perror("Error in open");
         exit(EXIT_FAILURE);
     }
     // escribo el archivo
     ssize_t n; 
     if ((n = write(fd, value, strlen(value))) == -1) {
-        perror("write");
+        perror("Error in write");
         close(fd);
         exit(EXIT_FAILURE);
     }
     if(n != strlen(value)){
-        fprintf(stderr, "ERROR writing file, value: %s, length: %ld, written: %ld.\n", value, strlen(value), n);
+        fprintf(stderr, "ERROR writing file, value: %s, bytes: %ld, bytes written: %ld.\n", value, strlen(value), n);
+        exit(EXIT_FAILURE);
+    }
+
+    if (close(fd) == -1) {
+        perror("Error in close");
         exit(EXIT_FAILURE);
     }
 
 }
 
+void dbGetValue(const char * pathKey, char * value){
+    // abro el archivo
+    int fd = open(pathKey, O_RDONLY);
+    if (fd == -1) {
+        perror("Error in open");
+        exit(EXIT_FAILURE);
+    }
+
+    ssize_t n;
+    if ((n = read(fd, value, MAX_VAL_READ_LEN)) == -1) {
+        perror("Error in read");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+    value[n] = '\0'; // me aseguro que tenga caracter null al final
+
+    if (close(fd) == -1) {
+        perror("Error in close");
+        exit(EXIT_FAILURE);
+    }
+}
 
 
 
 /* Utils */
 
-static void utilityStringTokenize(char * string, int maxTokens, char * array[]){
+static int utilityStringTokenize(char * string, int maxTokens, char * array[]){
     int i = 0;
     char *p = strtok (string, " ");
 
@@ -232,6 +281,8 @@ static void utilityStringTokenize(char * string, int maxTokens, char * array[]){
         fprintf(stderr, "ERROR invalid command.\nUsage:\n<CMD> <key> [<value>]\n");
         exit(EXIT_FAILURE);
     }
+
+    return i;
 }
 
 static void utilsGenerateFilePath(const char *folder, const char * filename, char * fullpath){
