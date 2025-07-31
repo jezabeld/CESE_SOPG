@@ -26,6 +26,7 @@ int serverSendMessage(int s, char * buffer);
 void serverSendUsageMsg(int s);
 void dbCreateKey(const char * pathKey, const char * value);
 void dbGetValue(const char * pathKey, char * value);
+void dbDeleteValue(const char * pathKey);
 static int utilityStringTokenize(char * string, int maxTokens, char * array[]);
 static void utilsEnsureDirectoryExists(const char * path);
 static int utilsFIleExists(const char * path);
@@ -108,14 +109,23 @@ int main(void){
                     printf("Comando DEL detectado\n");
                     if(params == 2){ // solo el cmd y una clave
                         printf("DEL %s\n", words[1]);
-                        // eliminar el registro
+                        // chequeo si existe la clave
+                        if (utilsFIleExists(fullpath)){ 
+                            // eliminar el registro
+                            printf("info: archivo a eliminar %s", fullpath);
+                            dbDeleteValue(fullpath);
+                            serverSendMessage(clientSoc, "OK\n");
+                        } else {
+                            printf("info: archivo solicitado no existe: %s\n", fullpath);
+                            serverSendMessage(clientSoc, "NOTFOUND\n");
+                        }
 
                     } else {
                         printf("info: DEL comando muy largo.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
                     }
                 } else {
-                    printf("info: ningun comando detectado\n");
+                    printf("info: ningún comando detectado\n");
                     serverSendMessage(clientSoc, "ERROR: ningún comando válido detectado.\n");
                     serverSendUsageMsg(clientSoc);
                 }
@@ -264,6 +274,17 @@ void dbGetValue(const char * pathKey, char * value){
     }
 }
 
+void dbDeleteValue(const char * pathKey){
+    /*
+    unlink() deletes a name from the filesystem.  If that name was the
+       last link to a file and no processes have the file open, the file
+       is deleted and the space it was using is made available for reuse.
+    */
+    if (unlink(pathKey) != 0) {
+        perror("Error in unlink");
+        exit(EXIT_FAILURE);
+    }
+}
 
 
 /* Utils */
@@ -299,10 +320,11 @@ static void utilsGenerateFilePath(const char *folder, const char * filename, cha
 }
 
 static int utilsFIleExists(const char * path){
-    /* access() checks whether the calling process can access the file
-    F_OK tests for the existence of the file.
-    On success (all requested permissions granted, or mode is F_OK and the file exists), zero is returned.
-    Otherwise, -1 is returned, and errno is set to indicate the error.
+    /* 
+    access() checks whether the calling process can access the file
+       F_OK tests for the existence of the file.
+       On success (all requested permissions granted, or mode is F_OK and the file exists), zero is returned.
+       Otherwise, -1 is returned, and errno is set to indicate the error.
     */
     return (access(path, F_OK) != -1);
 }
