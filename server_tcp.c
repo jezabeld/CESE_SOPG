@@ -16,8 +16,6 @@
 #define DB_FOLDER_PERM  0755
 #define FILES_PERM 0644
 
-const char * PATH_DB_FOLDER = "./db";
-
 /****************** prototipos funciones auxiliares ******************/
 int serverSocketSet(int port);
 int serverSocketAccept(int serverSoc);
@@ -27,21 +25,28 @@ void serverSendUsageMsg(int s);
 void dbCreateKey(const char * pathKey, const char * value);
 void dbGetValue(const char * pathKey, char * value);
 void dbDeleteValue(const char * pathKey);
-static int utilityStringTokenize(char * string, int maxTokens, char * array[]);
+static int utilsStringTokenize(char * string, int maxTokens, char * array[]);
 static void utilsEnsureDirectoryExists(const char * path);
-static int utilsFIleExists(const char * path);
+static int utilsFileExists(const char * path);
 static void utilsGenerateFilePath(const char *folder, const char * filename, char * fullpath);
- 
+static void utilsCleanupAndExit(int code);
+
+/************************ variables globales *************************/
+const char * PATH_DB_FOLDER = "./db";
+
+int serverSoc;
+int clientSoc;
+
 /*************************** main function ***************************/
 int main(void){
 
     // Seteamos el socket del server
-    int serverSoc = serverSocketSet(SERVER_PORT);
+    serverSoc = serverSocketSet(SERVER_PORT);
 
     while (1){
 
         // Espera conexión entrante
-        int clientSoc = serverSocketAccept(serverSoc);
+        clientSoc = serverSocketAccept(serverSoc);
 
         // Leemos mensaje de cliente
         char msg[MAX_MSG_LENGTH];
@@ -49,7 +54,7 @@ int main(void){
 
         if(bytesRead > 5){ // 3 del comando + 1 espacio + al menos 1 clave, si no se cumple ni miro que llego
             char *words[MAX_WORDS];
-            int params = utilityStringTokenize(msg, MAX_WORDS, words);
+            int params = utilsStringTokenize(msg, MAX_WORDS, words);
             printf("debug: parametros recibidos %d\n", params);
 
             if(params > 1){ // ademas del comando hay algo mas
@@ -67,8 +72,8 @@ int main(void){
                         printf("debug: SET %s %s\n", words[1], words[2]);
  
                         // chequeo si ya existe la clave
-                        if (utilsFIleExists(fullpath)){ 
-                            printf("info: archivo a setear ya existe");
+                        if (utilsFileExists(fullpath)){ 
+                            printf("info: archivo a setear ya existe\n");
                             serverSendMessage(clientSoc, "ALREADYSET\n");
                         } else {
                             // crear el registro
@@ -86,11 +91,11 @@ int main(void){
                     if(params == 2){ // solo el cmd y una clave
                         printf("debug: GET %s\n", words[1]);
                         // chequeo si existe la clave
-                        if (utilsFIleExists(fullpath)){ 
+                        if (utilsFileExists(fullpath)){ 
                             // obtengo el valor
                             char value[MAX_VAL_READ_LEN];
                             dbGetValue(fullpath, value);
-                            printf("info: valor a devolver %s", value);
+                            printf("info: valor a devolver %s\n", value);
                             // y lo devuelvo
                             char resp[MAX_MSG_LENGTH]; 
                             sprintf(resp, "OK\n%s\n", value);
@@ -110,9 +115,9 @@ int main(void){
                     if(params == 2){ // solo el cmd y una clave
                         printf("DEL %s\n", words[1]);
                         // chequeo si existe la clave
-                        if (utilsFIleExists(fullpath)){ 
+                        if (utilsFileExists(fullpath)){ 
                             // eliminar el registro
-                            printf("info: archivo a eliminar %s", fullpath);
+                            printf("info: archivo a eliminar %s\n", fullpath);
                             dbDeleteValue(fullpath);
                             serverSendMessage(clientSoc, "OK\n");
                         } else {
@@ -144,7 +149,9 @@ int main(void){
         close(clientSoc);
     }
 
-    return 0;
+    // para consistencia
+    close(serverSoc);
+    return EXIT_SUCCESS;
 }
 
 /*********************** funciones auxiliares ************************/
@@ -158,19 +165,19 @@ int serverSocketSet(int port){
     serveraddr.sin_port = htons(port);
     if (inet_pton(AF_INET, "127.0.0.1", &(serveraddr.sin_addr)) <= 0) {
         fprintf(stderr, "ERROR invalid server IP\n");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     // Abrimos puerto 
     if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1) {
         perror("Error in bind");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     // Seteamos socket en modo Listening
     if (listen(s, 1) == -1) {
         perror("Error in listen");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     return s;
@@ -184,7 +191,7 @@ int serverSocketAccept(int serverSoc){
     printf("info: esperando una conexión...\n");
     if ((clientSoc = accept(serverSoc, (struct sockaddr *)&clientaddr, &addr_len)) == -1) {
         perror("Error in accept");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     char ipClient[32];
@@ -198,9 +205,9 @@ int serverReadMessage(int s, char * buffer){
     int n;
     if ((n = read(s, buffer, MAX_MSG_LENGTH)) == -1) {
         perror("Error in read");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
-    buffer[n-1] = 0x00; // sobreescribo el salto de linea
+    if (n>0) buffer[n-1] = 0x00; // sobreescribo el salto de linea
     printf("info: recibidos %d bytes:%s\n", n, buffer);
     return n;
 }
@@ -210,11 +217,11 @@ int serverSendMessage(int s, char * buffer){
     int len = strlen(buffer);
     if(len > MAX_MSG_LENGTH){
         fprintf(stderr, "ERROR in serverSendMessage: message too long.\n");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
     if ((n = write(s, buffer, len)) == -1) {
         perror("Error in write");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
     printf("server: enviados %d bytes\n", n);
     return n;
@@ -231,23 +238,23 @@ void dbCreateKey(const char * pathKey, const char * value){
     int fd = open(pathKey, O_WRONLY | O_CREAT , FILES_PERM);
     if (fd == -1) {
         perror("Error in open");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
     // escribo el archivo
     ssize_t n; 
     if ((n = write(fd, value, strlen(value))) == -1) {
         perror("Error in write");
         close(fd);
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
     if(n != strlen(value)){
         fprintf(stderr, "ERROR writing file, value: %s, bytes: %ld, bytes written: %ld.\n", value, strlen(value), n);
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     if (close(fd) == -1) {
         perror("Error in close");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
 }
@@ -257,20 +264,20 @@ void dbGetValue(const char * pathKey, char * value){
     int fd = open(pathKey, O_RDONLY);
     if (fd == -1) {
         perror("Error in open");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     ssize_t n;
     if ((n = read(fd, value, MAX_VAL_READ_LEN)) == -1) {
         perror("Error in read");
         close(fd);
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
     value[n] = '\0'; // me aseguro que tenga caracter null al final
 
     if (close(fd) == -1) {
         perror("Error in close");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 }
 
@@ -282,14 +289,14 @@ void dbDeleteValue(const char * pathKey){
     */
     if (unlink(pathKey) != 0) {
         perror("Error in unlink");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 }
 
 
 /* Utils */
 
-static int utilityStringTokenize(char * string, int maxTokens, char * array[]){
+static int utilsStringTokenize(char * string, int maxTokens, char * array[]){
     int i = 0;
     char *p = strtok (string, " ");
 
@@ -300,7 +307,7 @@ static int utilityStringTokenize(char * string, int maxTokens, char * array[]){
     }
     if(p != NULL && i >= maxTokens){
         fprintf(stderr, "ERROR invalid command.\nUsage:\n<CMD> <key> [<value>]\n");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 
     return i;
@@ -315,11 +322,11 @@ static void utilsGenerateFilePath(const char *folder, const char * filename, cha
         printf("Fullpath del archivo: %s\n", fullpath);
     } else {
         fprintf(stderr, "ERROR path+archivo muy largo\n");
-        exit(EXIT_FAILURE);
+        utilsCleanupAndExit(EXIT_FAILURE);
     }
 }
 
-static int utilsFIleExists(const char * path){
+static int utilsFileExists(const char * path){
     /* 
     access() checks whether the calling process can access the file
        F_OK tests for the existence of the file.
@@ -337,9 +344,14 @@ static void utilsEnsureDirectoryExists(const char * path){
         // No existe, intento crearlo
         if (mkdir(path, DB_FOLDER_PERM) != 0) {
             perror("mkdir");// Fallo al crear
-            exit(EXIT_FAILURE);
+            utilsCleanupAndExit(EXIT_FAILURE);
         }
         printf("Carpeta creada correctamente.\n");
     }
 }
 
+static void utilsCleanupAndExit(int code){
+    if(clientSoc) close(clientSoc);
+    if(serverSoc) close(serverSoc);
+    exit(code);
+}
