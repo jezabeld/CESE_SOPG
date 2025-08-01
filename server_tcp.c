@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/stat.h> // Para mkdir()
+#include <signal.h>
 
 #define SERVER_PORT 5000
 #define MAX_MSG_LENGTH 128
@@ -30,6 +31,8 @@ static void utilsEnsureDirectoryExists(const char * path);
 static int utilsFileExists(const char * path);
 static void utilsGenerateFilePath(const char *folder, const char * filename, char * fullpath);
 static void utilsCleanupAndExit(int code);
+static void utilsSignalHandler(int sig);
+static void utilsAddSignalsToHandler(struct sigaction * sa, int array[], int len);
 
 /************************ variables globales *************************/
 const char * PATH_DB_FOLDER = "./db";
@@ -40,8 +43,17 @@ int clientSoc;
 /*************************** main function ***************************/
 int main(void){
 
+    struct sigaction sa = {0};
+    sa.sa_handler = utilsSignalHandler;
+    sa.sa_flags = 0; 
+    sigemptyset(&sa.sa_mask);
+
+    int signals[] = {SIGINT, SIGPIPE};
+    utilsAddSignalsToHandler(&sa, signals, sizeof(signals)/sizeof(signals[0])); 
+
     // Seteamos el socket del server
     serverSoc = serverSocketSet(SERVER_PORT);
+    
 
     while (1){
 
@@ -49,13 +61,13 @@ int main(void){
         clientSoc = serverSocketAccept(serverSoc);
 
         // Leemos mensaje de cliente
-        char msg[MAX_MSG_LENGTH];
+        char msg[MAX_MSG_LENGTH] = {0};
         int bytesRead = serverReadMessage(clientSoc, msg);
-
+        char *words[MAX_WORDS] = {0};
         if(bytesRead > 5){ // 3 del comando + 1 espacio + al menos 1 clave, si no se cumple ni miro que llego
-            char *words[MAX_WORDS];
+            
             int params = utilsStringTokenize(msg, MAX_WORDS, words);
-            printf("debug: parametros recibidos %d\n", params);
+            printf("server: parametros recibidos %d\n", params);
 
             if(params > 1){ // ademas del comando hay algo mas
                 
@@ -66,81 +78,81 @@ int main(void){
                 utilsGenerateFilePath(PATH_DB_FOLDER, words[1], fullpath);
 
                 if (strcmp(words[0], "SET") == 0) {
-                    printf("info: comando SET detectado\n");
+                    printf("server: comando SET detectado\n");
 
                     if(params == 3){ // tengo clave y valor
-                        printf("debug: SET %s %s\n", words[1], words[2]);
+                        printf("server: SET %s %s\n", words[1], words[2]);
  
                         // chequeo si ya existe la clave
                         if (utilsFileExists(fullpath)){ 
-                            printf("info: archivo a setear ya existe\n");
+                            printf("server: archivo a setear ya existe\n");
                             serverSendMessage(clientSoc, "ALREADYSET\n");
                         } else {
                             // crear el registro
                             dbCreateKey(fullpath, words[2]);
-                            printf("info: archivo creado: %s, valor: %s\n", fullpath, words[2]);
+                            printf("server: archivo creado: %s, valor: %s\n", fullpath, words[2]);
                             serverSendMessage(clientSoc, "OK\n");
                         }
                     } else {
-                        printf("info: SET comando muy corto.\n");
+                        printf("server: SET comando muy corto.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando SET requiere clave y valor.\n");
 
                     }
                 } else if (strcmp(words[0], "GET") == 0) {
-                    printf("info: comando GET detectado\n");
+                    printf("server: comando GET detectado\n");
                     if(params == 2){ // solo el cmd y una clave
-                        printf("debug: GET %s\n", words[1]);
+                        printf("server: GET %s\n", words[1]);
                         // chequeo si existe la clave
                         if (utilsFileExists(fullpath)){ 
                             // obtengo el valor
                             char value[MAX_VAL_READ_LEN];
                             dbGetValue(fullpath, value);
-                            printf("info: valor a devolver %s\n", value);
+                            printf("server: valor a devolver %s\n", value);
                             // y lo devuelvo
                             char resp[MAX_MSG_LENGTH]; 
                             sprintf(resp, "OK\n%s\n", value);
                             serverSendMessage(clientSoc, resp);
                         } else {
-                            printf("info: archivo solicitado no existe: %s\n", fullpath);
+                            printf("server: archivo solicitado no existe: %s\n", fullpath);
                             serverSendMessage(clientSoc, "NOTFOUND\n");
                         }
 
                     } else {
-                        printf("info: GET comando muy largo.\n");
+                        printf("server: GET comando muy largo.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando GET solo requiere clave.\n");
                     }
 
                 } else if (strcmp(words[0], "DEL") == 0) {
-                    printf("Comando DEL detectado\n");
+                    printf("server: comando DEL detectado\n");
                     if(params == 2){ // solo el cmd y una clave
-                        printf("DEL %s\n", words[1]);
+                        printf("server: DEL %s\n", words[1]);
                         // chequeo si existe la clave
                         if (utilsFileExists(fullpath)){ 
                             // eliminar el registro
-                            printf("info: archivo a eliminar %s\n", fullpath);
+                            printf("server: archivo a eliminar %s\n", fullpath);
                             dbDeleteValue(fullpath);
                             serverSendMessage(clientSoc, "OK\n");
                         } else {
-                            printf("info: archivo solicitado no existe: %s\n", fullpath);
+                            printf("server: archivo solicitado no existe: %s\n", fullpath);
                             serverSendMessage(clientSoc, "NOTFOUND\n");
                         }
 
                     } else {
-                        printf("info: DEL comando muy largo.\n");
+                        printf("server: DEL comando muy largo.\n");
                         serverSendMessage(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
                     }
                 } else {
-                    printf("info: ningún comando detectado\n");
+                    printf("server: ningún comando detectado\n");
                     serverSendMessage(clientSoc, "ERROR: ningún comando válido detectado.\n");
                     serverSendUsageMsg(clientSoc);
                 }
             } else {
-                printf("info: comando muy corto.\n");
+                printf("server: comando muy corto.\n");
                 serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
                 serverSendUsageMsg(clientSoc);
             }
-        } else {
-            printf("info: comando muy corto.\n");
+        } else if (bytesRead > 0){
+            printf("server: comando muy corto.\n");
             serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
             serverSendUsageMsg(clientSoc);
         }
@@ -188,7 +200,7 @@ int serverSocketAccept(int serverSoc){
     socklen_t addr_len = sizeof(struct sockaddr_in);
     struct sockaddr_in clientaddr;
     int clientSoc;
-    printf("info: esperando una conexión...\n");
+    printf("server: esperando una conexión...\n");
     if ((clientSoc = accept(serverSoc, (struct sockaddr *)&clientaddr, &addr_len)) == -1) {
         perror("Error in accept");
         utilsCleanupAndExit(EXIT_FAILURE);
@@ -196,7 +208,7 @@ int serverSocketAccept(int serverSoc){
 
     char ipClient[32];
     inet_ntop(AF_INET, &(clientaddr.sin_addr), ipClient, sizeof(ipClient));
-    printf("info: conexión desde:  %s\n", ipClient);
+    printf("server: conexión desde:  %s\n", ipClient);
 
     return clientSoc;
 }
@@ -208,7 +220,7 @@ int serverReadMessage(int s, char * buffer){
         utilsCleanupAndExit(EXIT_FAILURE);
     }
     if (n>0) buffer[n-1] = 0x00; // sobreescribo el salto de linea
-    printf("info: recibidos %d bytes:%s\n", n, buffer);
+    printf("server: recibidos %d bytes:%s\n", n, n? buffer: "");
     return n;
 }
 
@@ -319,7 +331,7 @@ static void utilsGenerateFilePath(const char *folder, const char * filename, cha
         strcat(fullpath, "/");  
         strncat(fullpath, filename, MAX_PATH_LEN- strlen(folder) + 1 - 1); // sumo 1 por la barra, resto 1 para no llegar al final
         fullpath[strlen(folder) + strlen(filename) + 1] = '\0'; // Asegura el null character
-        printf("Fullpath del archivo: %s\n", fullpath);
+        printf("utils: fullpath del archivo: %s\n", fullpath);
     } else {
         fprintf(stderr, "ERROR path+archivo muy largo\n");
         utilsCleanupAndExit(EXIT_FAILURE);
@@ -339,14 +351,14 @@ static int utilsFileExists(const char * path){
 static void utilsEnsureDirectoryExists(const char * path){
     if (access(path, F_OK) == 0) {
         // Ya existe
-        printf("Carpeta detectada correctamente.\n");
+        printf("utils: Carpeta detectada correctamente.\n");
     } else {
         // No existe, intento crearlo
         if (mkdir(path, DB_FOLDER_PERM) != 0) {
             perror("mkdir");// Fallo al crear
             utilsCleanupAndExit(EXIT_FAILURE);
         }
-        printf("Carpeta creada correctamente.\n");
+        printf("utils: Carpeta creada correctamente.\n");
     }
 }
 
@@ -354,4 +366,29 @@ static void utilsCleanupAndExit(int code){
     if(clientSoc) close(clientSoc);
     if(serverSoc) close(serverSoc);
     exit(code);
+}
+
+static void utilsAddSignalsToHandler(struct sigaction * sa, int array[], int len){
+    for(int i =0; i<len; i++){
+        if(sigaction(array[i], sa, NULL) == -1){
+            perror("Error in sigaction");
+            utilsCleanupAndExit(EXIT_FAILURE);
+        }
+    }
+}
+
+static void utilsSignalHandler(int sig) {
+    printf("handler: señal recibida %d.\n", sig);
+    switch(sig){
+        case SIGPIPE:
+            printf("handler: cliente corto la conexión. Cerrando socket del cliente.\n");
+            if(clientSoc) close(clientSoc);
+            break;
+        case SIGINT:
+            printf("handler: desconectando server.\n");
+            utilsCleanupAndExit(EXIT_SUCCESS);
+            break;
+        default:
+            break;
+    }
 }
