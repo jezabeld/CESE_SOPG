@@ -62,6 +62,35 @@ int serverSendMessage(int s, char* buffer);
 void serverSendUsageMsg(int s);
 
 /**
+ * @brief Envía mensaje de error y uso al cliente
+ * @param s Socket del cliente
+ * @param errorMsg Mensaje de error a enviar
+ */
+static void serverSendError(int s, const char * errorMsg, int sendUsage);
+
+/**
+ * @brief Maneja el comando SET
+ * @param clientSoc Socket del cliente
+ * @param key Clave a establecer
+ * @param value Valor a almacenar
+ */
+static void serverHandleSetCmd(int clientSoc, const char * key, const char * value);
+
+/**
+ * @brief Maneja el comando GET
+ * @param clientSoc Socket del cliente
+ * @param key Clave a obtener
+ */
+static void serverHandleGetCmd(int clientSoc, const char * key);
+
+/**
+ * @brief Maneja el comando DEL
+ * @param clientSoc Socket del cliente
+ * @param key Clave a eliminar
+ */
+static void serverHandleDelCmd(int clientSoc, const char * key);
+
+/**
  * @brief Crea una nueva clave en la base de datos
  * @param pathKey Ruta del archivo de la clave
  * @param value Valor a almacenar
@@ -131,13 +160,6 @@ static void utilsSignalHandler(int sig);
  */
 static void utilsAddSignalsToHandler(struct sigaction* sa, int array[], int len);
 
-/**
- * @brief Envía mensaje de error y uso al cliente
- * @param s Socket del cliente
- * @param errorMsg Mensaje de error a enviar
- */
-static void serverSendError(int s, const char * errorMsg);
-
 /************************ variables globales *************************/
 /** @brief Ruta de la carpeta de base de datos */
 const char* PATH_DB_FOLDER = "./db";
@@ -160,7 +182,7 @@ int clientSoc;
  * @return EXIT_SUCCESS en caso de terminación controlada.
  */
 int main(void) {
-
+    
     struct sigaction sa = { 0 };
     sa.sa_handler = utilsSignalHandler;
     sa.sa_flags = 0;
@@ -180,85 +202,43 @@ int main(void) {
         // Leemos mensaje de cliente
         char msg[MAX_MSG_LENGTH] = { 0 };
         int bytesRead = serverReadMessage(clientSoc, msg);
-        char* words[MAX_WORDS] = { 0 };
-        if (bytesRead > 5) { // 3 del comando + 1 espacio + al menos 1 clave, si no se cumple ni
-                             // miro que llego
 
+        // Procesamiento del mensaje
+        char* words[MAX_WORDS] = { 0 };
+        if (bytesRead > 5) { // 3 del comando + 1 espacio + al menos 1 clave
             int params = utilsStringTokenize(msg, MAX_WORDS, words);
             printf("server: parámetros recibidos %d\n", params);
 
             if (params > 1) { // ademas del comando hay algo mas
-
                 // aseguro q exista la carpeta
                 utilsEnsureDirectoryExists(PATH_DB_FOLDER);
-                // creo la ruta del archivo
-                char fullpath[MAX_PATH_LEN];
-                utilsGenerateFilePath(PATH_DB_FOLDER, words[1], fullpath);
 
                 if (strcmp(words[0], "SET") == 0) {
-                    printf("server: comando SET detectado\n");
-
-                    if (params == 3) { // tengo clave y valor
-                        printf("server: SET %s %s\n", words[1], words[2]);
-
-                        // crear/actualizar el registro
-                        int fileExists = utilsFileExists(fullpath);
-                        dbCreateKey(fullpath, words[2]);
-                        if (fileExists) {
-                            printf("server: archivo actualizado: %s, valor: %s\n", fullpath, words[2]);
-                        } else {
-                            printf("server: archivo creado: %s, valor: %s\n", fullpath, words[2]);
-                        }
-                        serverSendMessage(clientSoc, "OK\n");
+                    if (params == 3) {
+                        serverHandleSetCmd(clientSoc, words[1], words[2]);
                     } else {
-                        serverSendError(clientSoc, "ERROR: el comando SET requiere clave y valor.\n");
+                        serverSendError(clientSoc, "ERROR: el comando SET requiere clave y valor.\n", 1);
                     }
                 } else if (strcmp(words[0], "GET") == 0) {
-                    printf("server: comando GET detectado\n");
-                    if (params == 2) { // solo el cmd y una clave
-                        printf("server: GET %s\n", words[1]);
-                        // chequeo si existe la clave
-                        if (utilsFileExists(fullpath)) {
-                            // obtengo el valor
-                            char value[MAX_VAL_READ_LEN];
-                            dbGetValue(fullpath, value);
-                            printf("server: valor a devolver %s\n", value);
-                            // y lo devuelvo
-                            char resp[MAX_MSG_LENGTH];
-                            sprintf(resp, "OK\n%s\n", value);
-                            serverSendMessage(clientSoc, resp);
-                        } else {
-                            printf("server: archivo solicitado no existe: %s\n", fullpath);
-                            serverSendMessage(clientSoc, "NOTFOUND\n");
-                        }
+                    if (params == 2) {
+                        serverHandleGetCmd(clientSoc, words[1]);
                     } else {
-                        serverSendError(clientSoc, "ERROR: el comando GET solo requiere clave.\n");
+                        serverSendError(clientSoc, "ERROR: el comando GET solo requiere clave.\n", 1);
                     }
                 } else if (strcmp(words[0], "DEL") == 0) {
-                    printf("server: comando DEL detectado\n");
-                    if (params == 2) { // solo el cmd y una clave
-                        printf("server: DEL %s\n", words[1]);
-                        // chequeo si existe la clave
-                        if (utilsFileExists(fullpath)) {
-                            // eliminar el registro
-                            printf("server: archivo a eliminar %s\n", fullpath);
-                            dbDeleteValue(fullpath);
-                            serverSendMessage(clientSoc, "OK\n");
-                        } else {
-                            printf("server: archivo solicitado no existe: %s\n", fullpath);
-                            serverSendMessage(clientSoc, "NOTFOUND\n");
-                        }
+                    if (params == 2) {
+                        serverHandleDelCmd(clientSoc, words[1]);
                     } else {
-                        serverSendError(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
+                        serverSendError(clientSoc, "ERROR: el comando DEL solo requiere clave.\n", 1);
                     }
                 } else {
-                    serverSendError(clientSoc, "ERROR: ningún comando válido detectado.\n");
+                    serverSendError(clientSoc, "ERROR: ningún comando válido detectado.\n", 1);
                 }
             } else {
-                serverSendError(clientSoc, "ERROR: comando muy corto.\n");
+                serverSendError(clientSoc, "ERROR: comando muy corto.\n", 1);
             }
         } else if (bytesRead > 0) {
-            serverSendError(clientSoc, "ERROR: comando muy corto.\n");
+            serverSendError(clientSoc, "ERROR: comando muy corto.\n", 1);
         }
 
         // Active Close
@@ -346,6 +326,69 @@ int serverSendMessage(int s, char* buffer) {
 void serverSendUsageMsg(int s) {
     serverSendMessage(s, "Usage:\n<CMD> <key> [<value>]\nComandos:\n\tSET\tSetea un registro clave-valor nuevo.\n");
     serverSendMessage(s, "\tGET\tObtiene el valor de una clave.\n\tDEL\tElimina un registro a partir de su clave.\n");
+}
+
+static void serverHandleSetCmd(int clientSoc, const char * key, const char * value) {
+    printf("server: comando SET detectado - SET %s %s\n", key, value);
+
+    char fullpath[MAX_PATH_LEN];
+    utilsGenerateFilePath(PATH_DB_FOLDER, key, fullpath);
+
+    // crear/actualizar el registro
+    int fileExists = utilsFileExists(fullpath);
+    dbCreateKey(fullpath, value);
+    if (fileExists) {
+        printf("server: archivo actualizado: %s, valor: %s\n", fullpath, value);
+    } else {
+        printf("server: archivo creado: %s, valor: %s\n", fullpath, value);
+    }
+    serverSendMessage(clientSoc, "OK\n");
+}
+
+static void serverHandleGetCmd(int clientSoc, const char * key) {
+    printf("server: comando GET detectado - GET %s\n", key);
+
+    char fullpath[MAX_PATH_LEN];
+    utilsGenerateFilePath(PATH_DB_FOLDER, key, fullpath);
+
+    // chequeo si existe la clave
+    if (utilsFileExists(fullpath)) {
+        // obtengo el valor
+        char value[MAX_VAL_READ_LEN];
+        dbGetValue(fullpath, value);
+        printf("server: valor a devolver %s\n", value);
+        // y lo devuelvo
+        char resp[MAX_MSG_LENGTH];
+        sprintf(resp, "OK\n%s\n", value);
+        serverSendMessage(clientSoc, resp);
+    } else {
+        printf("server: archivo solicitado no existe: %s\n", fullpath);
+        serverSendMessage(clientSoc, "NOTFOUND\n");
+    }
+}
+
+static void serverHandleDelCmd(int clientSoc, const char * key) {
+    printf("server: comando DEL detectado - DEL %s\n", key);
+
+    char fullpath[MAX_PATH_LEN];
+    utilsGenerateFilePath(PATH_DB_FOLDER, key, fullpath);
+
+    // chequeo si existe la clave
+    if (utilsFileExists(fullpath)) {
+        // eliminar el registro
+        printf("server: archivo a eliminar %s\n", fullpath);
+        dbDeleteValue(fullpath);
+        serverSendMessage(clientSoc, "OK\n");
+    } else {
+        printf("server: archivo solicitado no existe: %s\n", fullpath);
+        serverSendMessage(clientSoc, "NOTFOUND\n");
+    }
+}
+
+static void serverSendError(int s, const char * errorMsg, int sendUsage) {
+    printf("server: %s\n", errorMsg);
+    serverSendMessage(s, (char *)errorMsg);
+    if(sendUsage) serverSendUsageMsg(s);
 }
 
 /*********************** funciones de base de datos ************************/
@@ -507,12 +550,6 @@ static void utilsSignalHandler(int sig) {
     default:
         break;
     }
-}
-
-static void serverSendError(int s, const char * errorMsg) {
-    printf("server: %s\n", errorMsg);
-    serverSendMessage(s, (char *)errorMsg);
-    serverSendUsageMsg(s);
 }
 
 /*********************** end of file ************************/
