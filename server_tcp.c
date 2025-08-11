@@ -131,6 +131,13 @@ static void utilsSignalHandler(int sig);
  */
 static void utilsAddSignalsToHandler(struct sigaction* sa, int array[], int len);
 
+/**
+ * @brief Envía mensaje de error y uso al cliente
+ * @param s Socket del cliente
+ * @param errorMsg Mensaje de error a enviar
+ */
+static void serverSendError(int s, const char * errorMsg);
+
 /************************ variables globales *************************/
 /** @brief Ruta de la carpeta de base de datos */
 const char* PATH_DB_FOLDER = "./db";
@@ -194,19 +201,17 @@ int main(void) {
                     if (params == 3) { // tengo clave y valor
                         printf("server: SET %s %s\n", words[1], words[2]);
 
-                        // chequeo si ya existe la clave
-                        if (utilsFileExists(fullpath)) {
-                            printf("server: archivo a setear ya existe\n");
-                            serverSendMessage(clientSoc, "ALREADYSET\n");
+                        // crear/actualizar el registro
+                        int fileExists = utilsFileExists(fullpath);
+                        dbCreateKey(fullpath, words[2]);
+                        if (fileExists) {
+                            printf("server: archivo actualizado: %s, valor: %s\n", fullpath, words[2]);
                         } else {
-                            // crear el registro
-                            dbCreateKey(fullpath, words[2]);
                             printf("server: archivo creado: %s, valor: %s\n", fullpath, words[2]);
-                            serverSendMessage(clientSoc, "OK\n");
                         }
+                        serverSendMessage(clientSoc, "OK\n");
                     } else {
-                        printf("server: SET comando muy corto.\n");
-                        serverSendMessage(clientSoc, "ERROR: el comando SET requiere clave y valor.\n");
+                        serverSendError(clientSoc, "ERROR: el comando SET requiere clave y valor.\n");
                     }
                 } else if (strcmp(words[0], "GET") == 0) {
                     printf("server: comando GET detectado\n");
@@ -227,8 +232,7 @@ int main(void) {
                             serverSendMessage(clientSoc, "NOTFOUND\n");
                         }
                     } else {
-                        printf("server: GET comando muy largo.\n");
-                        serverSendMessage(clientSoc, "ERROR: el comando GET solo requiere clave.\n");
+                        serverSendError(clientSoc, "ERROR: el comando GET solo requiere clave.\n");
                     }
                 } else if (strcmp(words[0], "DEL") == 0) {
                     printf("server: comando DEL detectado\n");
@@ -245,23 +249,16 @@ int main(void) {
                             serverSendMessage(clientSoc, "NOTFOUND\n");
                         }
                     } else {
-                        printf("server: DEL comando muy largo.\n");
-                        serverSendMessage(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
+                        serverSendError(clientSoc, "ERROR: el comando DEL solo requiere clave.\n");
                     }
                 } else {
-                    printf("server: ningún comando detectado\n");
-                    serverSendMessage(clientSoc, "ERROR: ningún comando válido detectado.\n");
-                    serverSendUsageMsg(clientSoc);
+                    serverSendError(clientSoc, "ERROR: ningún comando válido detectado.\n");
                 }
             } else {
-                printf("server: comando muy corto.\n");
-                serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
-                serverSendUsageMsg(clientSoc);
+                serverSendError(clientSoc, "ERROR: comando muy corto.\n");
             }
         } else if (bytesRead > 0) {
-            printf("server: comando muy corto.\n");
-            serverSendMessage(clientSoc, "ERROR: comando muy corto.\n");
-            serverSendUsageMsg(clientSoc);
+            serverSendError(clientSoc, "ERROR: comando muy corto.\n");
         }
 
         // Active Close
@@ -354,7 +351,8 @@ void serverSendUsageMsg(int s) {
 /*********************** funciones de base de datos ************************/
 void dbCreateKey(const char* pathKey, const char* value) {
     // creo el archivo y lo abro
-    int fd = open(pathKey, O_WRONLY | O_CREAT, FILES_PERM);
+    // O_TRUNC: Trunca el archivo a longitud 0 si ya existe (borra el contenido anterior)
+    int fd = open(pathKey, O_WRONLY | O_CREAT | O_TRUNC, FILES_PERM);
     if (fd == -1) {
         perror("Error in open");
         utilsCleanupAndExit(EXIT_FAILURE);
@@ -366,7 +364,7 @@ void dbCreateKey(const char* pathKey, const char* value) {
         close(fd);
         utilsCleanupAndExit(EXIT_FAILURE);
     }
-    if (n != strlen(value)) {
+    if ((size_t)n != strlen(value)) {
         fprintf(stderr, "ERROR writing file, value: %s, bytes: %ld, bytes written: %ld.\n", value, strlen(value), n);
         utilsCleanupAndExit(EXIT_FAILURE);
     }
@@ -509,6 +507,12 @@ static void utilsSignalHandler(int sig) {
     default:
         break;
     }
+}
+
+static void serverSendError(int s, const char * errorMsg) {
+    printf("server: %s\n", errorMsg);
+    serverSendMessage(s, (char *)errorMsg);
+    serverSendUsageMsg(s);
 }
 
 /*********************** end of file ************************/
